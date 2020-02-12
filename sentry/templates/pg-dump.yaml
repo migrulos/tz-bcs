@@ -1,0 +1,47 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: {{ template "sentry.fullname" . }}-pg-dump
+spec:
+  schedule: "4 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: {{ template "sentry.serviceAccountName" . }}
+          containers:
+          - name: {{ .Chart.Name }}-pg-dump
+            image: postgres:12
+            imagePullPolicy: IfNotPresent
+            env:                                                                          
+            - name: PGHOST
+              value: {{ template "sentry.postgresql.host" . }}
+            - name: PGPORT
+              value: {{ template "sentry.postgresql.port" . }}
+            - name: PGUSER
+              value: {{ default "sentry" .Values.postgresql.postgresqlUsername | quote }} 
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                {{- if .Values.postgresql.existingSecret }}
+                  name: {{ .Values.postgresql.existingSecret }} 
+                {{- else }}
+                  name: {{ template "sentry.postgresql.secret" . }}
+                {{- end }}
+                  key: {{ template "sentry.postgresql.secretKey" . }}
+            args:
+            - /bin/sh
+            - -c
+            - pg_dumpall > /pg-dump/db-i"$(date +%Y%m%d-%H%M)".out
+            volumeMounts:
+            - mountPath: /pg-dump
+              name: pg-dump-pv
+          initContainers:
+          - name: check-pg
+            image: postgres:12
+            command: ['sh', '-c', 'until pg_isready -h {{ template "sentry.postgresql.host" . }} -p {{ template "sentry.postgresql.port" . }} -U {{ default "sentry" .Values.postgresql.postgresqlUsername}}; do echo waiting for database; sleep 2; done;']
+          restartPolicy: OnFailure
+          volumes:
+          - name: pg-dump-pv
+            persistentVolumeClaim:
+              claimName: {{ .Values.filestore.filesystem.persistence.existingClaim | default (include "sentry.fullname" .) }}
